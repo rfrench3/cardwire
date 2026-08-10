@@ -1,0 +1,18 @@
+{
+  "name": "Qt/KDE devcontainer",
+  "remoteUser": "user",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+  },
+  "containerEnv": {
+    "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
+    "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
+    "XDG_SESSION_TYPE": "${localEnv:XDG_SESSION_TYPE}",
+  },
+  "privileged": true,
+  "mounts": [
+    "source=${localEnv:XDG_RUNTIME_DIR},target=${localEnv:XDG_RUNTIME_DIR},type=bind,consistency=cached",
+    "source=/dev/input,target=/dev/input,type=bind",
+  ],
+}
