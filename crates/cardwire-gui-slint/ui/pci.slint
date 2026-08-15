@@ -1,0 +1,141 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+    GridBox,
+    Button,
+} from "std-widgets.slint";
+
+import { Card, ButtonCard, Page, Header } from "components/parts.slint";
+
+struct PciInfo {
+    name: string,
+    pci: string,
+    iommu: string,
+    vendor: string,
+    driver: string,
+    class: string,
+    parent_dev: string,
+    child_dev: string
+}
+
+export component Pci inherits Page {
+    title: "Pci Devices";
+
+    in-out property <[PciInfo]> devices: [
+        {
+            name: "example device",
+            pci: "0000:00:02.0",
+            iommu: "Group 0",
+            vendor: "Intel Corporation [8086:9a49]",
+            driver: "i915",
+            class: "VGA compatible controller [0300]",
+            parent_dev: "0000:00:00.0",
+            child_dev: "None"
+        },
+        {
+            name: "example device",
+            pci: "0000:01:00.0",
+            iommu: "Group 13",
+            vendor: "NVIDIA Corporation [10de:2484]",
+            driver: "vfio-pci",
+            class: "3D controller [0302]",
+            parent_dev: "0000:00:01.0",
+            child_dev: "0000:01:00.1"
+        },
+        {
+            name: "example device",
+            pci: "0000:02:00.0",
+            iommu: "Group 14",
+            vendor: "Samsung Electronics Co Ltd [144d:a80a]",
+            driver: "nvme",
+            class: "Non-Volatile memory controller [0108]",
+            parent_dev: "0000:00:1b.0",
+            child_dev: "None"
+        },
+        {
+            name: "example device",
+            pci: "0000:04:00.0",
+            iommu: "Group 17",
+            vendor: "Realtek Semiconductor Co., Ltd. [10ec:8125]",
+            driver: "r8169",
+            class: "Ethernet controller [0200]",
+            parent_dev: "0000:00:1c.4",
+            child_dev: "None"
+        },
+        {
+            name: "example device",
+            pci: "0000:05:00.0",
+            iommu: "Group 18",
+            vendor: "Intel Corporation [8086:2723]",
+            driver: "iwlwifi",
+            class: "Network controller [0280]",
+            parent_dev: "0000:00:1d.0",
+            child_dev: "None"
+        }
+    ];
+
+    VerticalBox {
+        alignment: start;
+
+        HorizontalLayout {
+            Header {
+                text: "List of PCI Devices";
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Button {
+                text: "Copy to Clipboard";
+
+                clicked => {}
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            height: 100%;
+            VerticalBox {
+                alignment: start;
+                height: 100%;
+
+                for item in root.devices: Card {
+                    title: item.name;
+
+                    Text {
+                        text: "PCI: " + item.pci;
+                    }
+
+                    Text {
+                        text: "IOMMU group: " + item.iommu;
+                    }
+
+                    Text {
+                        text: "Vendor: " + item.vendor;
+                    }
+
+                    Text {
+                        text: "Driver: " + item.driver;
+                    }
+
+                    Text {
+                        text: "Class: " + item.class;
+                    }
+
+                    Text {
+                        text: "Parent Device: " + item.parent-dev;
+                    }
+
+                    Text {
+                        text: "Child Device: " + item.child-dev;
+                    }
+                }
+            }
+        }
+    }
+}

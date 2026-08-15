@@ -1,0 +1,86 @@
+import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+import { Page } from "components/parts.slint";
+
+import { Main } from "main.slint";
+import { About } from "about.slint";
+import { Advanced } from "advanced.slint";
+import { CardwireSettings } from "cardwire-settings.slint";
+import { Pci } from "pci.slint";
+
+enum Page { Main, Pci, SmartMode, AccessLogs, CardwireSettings, Advanced, About }
+
+export global State { }
+
+export component MainWindow inherits Window {
+    title: "Application";
+    preferred-width: 800px;
+    preferred-height: 600px;
+
+    private property <Page> current-page: Page.Main;
+
+    HorizontalBox {
+        // Side navigation bar
+        VerticalBox {
+            width: 200px;
+            alignment: start;
+
+            Button {
+                text: "Main";
+                clicked => { root.current-page = Page.Main; }
+                checked: root.current-page == Page.Main;
+            }
+
+            Button {
+                text: "PCI";
+                clicked => { root.current-page = Page.Pci; }
+                checked: root.current-page == Page.Pci;
+            }
+
+            Button {
+                text: "Smart Mode (TODO)";
+                clicked => { root.current-page = Page.SmartMode; }
+                checked: root.current-page == Page.SmartMode;
+            }
+
+            Button {
+                text: "Access Logs (TODO)";
+                clicked => { root.current-page = Page.AccessLogs; }
+                checked: root.current-page == Page.AccessLogs;
+            }
+
+            Button {
+                text: "Cardwire Settings";
+                clicked => { root.current-page = Page.CardwireSettings; }
+                checked: root.current-page == Page.CardwireSettings;
+            }
+
+            Button {
+                text: "Advanced";
+                clicked => { root.current-page = Page.Advanced; }
+                checked: root.current-page == Page.Advanced;
+            }
+
+            Button {
+                text: "About";
+                clicked => { root.current-page = Page.About; }
+                checked: root.current-page == Page.About;
+            }
+        }
+
+        // Page area
+        VerticalBox {
+            if root.current-page == Page.Main: Main { }
+            if root.current-page == Page.Pci: Pci { }
+            if root.current-page == Page.SmartMode: Page {
+                title: "Smart Mode Content (TODO)";
+            }
+            if root.current-page == Page.AccessLogs: Page {
+                title: "Access Logs Content (TODO)";
+            }
+            if root.current-page == Page.CardwireSettings: CardwireSettings { }
+            if root.current-page == Page.Advanced: Advanced { }
+            if root.current-page == Page.About: About { }
+        }
+    }
+}

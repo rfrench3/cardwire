@@ -1,0 +1,20 @@
+
+import { Palette } from "std-widgets.slint";
+
+export struct Font { size: length, weight: int }
+
+export global Style {
+
+    out property <color> border-color-subtle: Palette.foreground.transparentize(0.8);
+
+    out property <length> border-length-small: 1px;
+
+    out property <length> radius-small: 6px;
+
+    out property <int> weight-bold: 700;
+
+    out property <length> font-header: 16px;
+
+    out property <length> spacing-small: 4px;
+    out property <length> spacing-medium: 8px;
+}

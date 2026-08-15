@@ -1,0 +1,98 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+} from "std-widgets.slint";
+
+import { Card, Page, Header } from "components/parts.slint";
+import { Style } from "components/style.slint";
+
+struct DeviceInfo {
+    device: string,
+    vendor: string,
+    pci: string,
+    nodes: string,
+    blocked: string,
+}
+
+export component Main inherits Page {
+    title: "Main";
+
+    // example data
+    in-out property <[DeviceInfo]> devices: [
+        {
+            device: "Device 1",
+            vendor: "Vendor",
+            pci: "PCI info",
+            nodes: "Nodes info",
+            blocked: "blocked info"
+        },
+        {
+            device: "Device 2",
+            vendor: "Vendor",
+            pci: "PCI info",
+            nodes: "Nodes info",
+            blocked: "blocked info"
+        },
+        {
+            device: "Device 3",
+            vendor: "Vendor",
+            pci: "PCI info",
+            nodes: "Nodes info",
+            blocked: "blocked info"
+        }
+    ];
+
+    VerticalBox {
+
+        HorizontalBox {
+            alignment: start;
+            padding: 0px;
+
+            Text {
+                text: "Mode:";
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                model: ["Integrated", "Hybrid", "Manual", "Smart"];
+                current-value: "Integrated";
+            }
+        }
+
+        Header {
+            text: "Connected Devices";
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            height: 100%;
+            VerticalBox {
+                alignment: start;
+                height: 100%;
+
+                for item in root.devices: Card {
+                    title: item.device;
+
+                    Text {
+                        text: "Vendor: " + item.vendor;
+                    }
+
+                    Text {
+                        text: "PCI: " + item.pci;
+                    }
+
+                    Text {
+                        text: "Nodes: " + item.nodes;
+                    }
+
+                    Text {
+                        text: "Blocked: " + item.blocked;
+                    }
+                }
+            }
+        }
+    }
+}
