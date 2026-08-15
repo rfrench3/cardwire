@@ -1,0 +1,112 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+    Button,
+    CheckBox,
+} from "std-widgets.slint";
+
+import { Style } from "style.slint";
+
+export component Header inherits Text {
+    font-size: Style.font-header;
+    font-weight: Style.weight-bold;
+}
+
+export component Separator inherits Rectangle {
+    background: Style.border-color-subtle;
+    height: Style.border-length-small;
+}
+
+export component Card inherits Rectangle {
+    border-radius: Style.radius-small;
+    border-width: Style.border-length-small;
+    border-color: Style.border-color-subtle;
+
+    clip: true;
+
+    in property <string> title;
+
+    in property <bool> hide_separator: false;
+
+    VerticalBox {
+
+        alignment: start;
+
+        if root.title != "": Header {
+            text: root.title;
+        }
+
+        if root.hide_separator == false && root.title != "": Separator { }
+
+        @children
+    }
+}
+
+enum WidgetType { Button, CheckBox, ComboBox }
+
+export component ButtonCard inherits Card {
+
+    in property <string> text;
+
+    // Button
+    callback clicked();
+
+    // Checkbox
+    out property <bool> checked;
+    callback toggled();
+
+    // Combobox
+    in property <[string]> model;
+    callback selected(string);
+
+    in property <WidgetType> widget;
+
+    HorizontalLayout {
+        spacing: root.text == "" ? 0px : Style.spacing-medium;
+
+        if root.text != "": Text {
+            text: root.text;
+            vertical-alignment: center;
+        }
+
+        if root.widget == WidgetType.Button: Button {
+            clicked => { root.clicked(); }
+        }
+
+        if root.widget == WidgetType.CheckBox: CheckBox {
+            checked <=> root.checked;
+            toggled => { root.toggled(); }
+        }
+
+        if root.widget == WidgetType.ComboBox: ComboBox {
+            model: root.model;
+            selected(current-value) => {
+                root.selected(current-value)
+            }
+            height: self.preferred-height;
+        }
+    }
+}
+
+export component Page inherits VerticalBox {
+    in property <string> title;
+
+    width: 100%;
+    height: 100%;
+
+    Text {
+        font-size: Style.font-header;
+        font-weight: Style.weight-bold;
+        text: root.title;
+    }
+
+    Separator { }
+
+    Rectangle {
+        vertical-stretch: 1;
+        @children
+    }
+}

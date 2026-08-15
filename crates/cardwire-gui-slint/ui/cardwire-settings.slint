@@ -1,0 +1,58 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+    GridBox,
+    Button,
+} from "std-widgets.slint";
+
+import { Card, ButtonCard, Page, Header } from "components/parts.slint";
+
+export component CardwireSettings inherits Page {
+    title: "Cardwire Settings";
+
+    VerticalBox {
+        alignment: start;
+
+        ButtonCard {
+            text: "Nvidia Experimental Block";
+            widget: CheckBox;
+            toggled => {}
+        }
+
+        ButtonCard {
+            text: "Auto Apply GPU-States";
+            widget: CheckBox;
+            toggled => {}
+        }
+
+        ButtonCard {
+            text: "Switch Mode on battery";
+            widget: CheckBox;
+            toggled => {}
+        }
+
+        ButtonCard {
+            text: "Mode";
+            widget: ComboBox;
+            model: ["Integrated", "Hybrid", "Manual", "Smart"];
+            vertical-stretch: 0;
+        }
+
+        ButtonCard {
+            title: "GUI: Start in Tray";
+            text: "Do not open the GUI when Cardwire starts. Takes effect next launch.";
+            widget: CheckBox;
+            toggled => {}
+        }
+
+        ButtonCard {
+            text: "Tray Icon: Primary Click";
+            widget: ComboBox;
+            model: ["Switch Mode", "Open GUI"];
+            vertical-stretch: 0;
+        }
+    }
+}

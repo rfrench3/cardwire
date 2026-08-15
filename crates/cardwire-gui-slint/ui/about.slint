@@ -1,0 +1,77 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+    GridBox,
+} from "std-widgets.slint";
+
+import { Card, Page } from "components/parts.slint";
+import { Style } from "components/style.slint";
+
+export struct DeviceInfo {
+    device: string,
+    vendor: string,
+    pci: string,
+    nodes: string,
+    blocked: string,
+}
+
+export component About inherits Page {
+    title: "About";
+
+    VerticalBox {
+        alignment: start;
+
+        Card {
+            title: "Cardwire";
+
+            GridBox {
+                Text {
+                    text: "Version:";
+                }
+
+                Text {
+                    text: "Version";
+                }
+
+                Text {
+                    text: "Author:";
+                    row: 1;
+                }
+
+                Text {
+                    text: "luytan";
+                }
+
+                Text {
+                    text: "Other contributors:";
+                    row: 2;
+                }
+
+                Text {
+                    text: "SeawolfTony";
+                }
+
+                Text {
+                    text: "License:";
+                    row: 3;
+                }
+
+                Text {
+                    text: "GPL-3.0";
+                }
+
+                Text {
+                    text: "Repository:";
+                    row: 4;
+                }
+
+                Text {
+                    text: "github.com/OpenGamingCollective/cardwire";
+                }
+            }
+        }
+    }
+}

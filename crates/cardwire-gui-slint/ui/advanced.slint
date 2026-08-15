@@ -1,0 +1,31 @@
+import {
+    ComboBox,
+    VerticalBox,
+    HorizontalBox,
+    ScrollView,
+    Palette,
+    GridBox,
+    Button,
+} from "std-widgets.slint";
+
+import { Card, Page, ButtonCard } from "components/parts.slint";
+import { Style } from "components/style.slint";
+
+export component Advanced inherits Page {
+    title: "Advanced";
+
+    VerticalBox {
+        alignment: start;
+
+        Card {
+            title: "Warning: These actions are for advanced users.";
+            hide_separator: true;
+        }
+
+        ButtonCard {
+            title: "Refresh GPU List";
+            text: "Re-scan PCI devices and update the internal GPU list.";
+            clicked => {}
+        }
+    }
+}

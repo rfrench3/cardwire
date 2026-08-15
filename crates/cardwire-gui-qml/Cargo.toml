@@ -1,8 +1,0 @@
-[package]
-name = "cardwire_gui"
-version = "0.1.0"
-edition = "2024"
-description = "A Kirigami interface for cardwire"
-
-[dependencies]
-qtbridge = { git = "https://github.com/qt/qtbridge-rust", branch = "dev" }
