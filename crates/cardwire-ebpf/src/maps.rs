@@ -35,21 +35,35 @@ pub struct InodeState {
 }
 
 /*
+   Key = entry name (dentry d_name / dirent d_name), zero-padded to 64 bytes
+   and inode number
+   Layout must stay identical to cardwire-ebpf-userspace's InodeKey, the kernel
+   hashes the raw key bytes so any drift turns every lookup into a silent miss
+*/
+#[repr(C, align(8))]
+#[derive(Copy, Clone)]
+pub struct InodeKey {
+    pub name: [u8; 64],
+    pub ino: u64,
+}
+
+/*
    Map used to store blocked inodes sent from userspace
-   Key = Inode
+   Key = (superblock device id, inode)
    Value = associated GPU and block state
 */
 #[map]
-pub static CW_BLOCKED_INO: HashMap<u64, InodeState> =
-    HashMap::<u64, InodeState>::with_max_entries(16384, 0);
+pub static CW_BLOCKED_INO: HashMap<InodeKey, InodeState> =
+    HashMap::<InodeKey, InodeState>::with_max_entries(16384, 0);
 
 /*
    Map used to store blocked inodes from exp_nvidia
-   Key = Inode
+   Key = (superblock device id, inode)
    Value = 0, not used because exp files can be shared by multiple devices (nvidiactl)
 */
 #[map]
-pub static CW_EXP_BLK_INO: HashMap<u64, u32> = HashMap::<u64, u32>::with_max_entries(4096, 0);
+pub static CW_EXP_BLK_INO: HashMap<InodeKey, u32> =
+    HashMap::<InodeKey, u32>::with_max_entries(4096, 0);
 
 /*
     Map used to store a list of allowed pid

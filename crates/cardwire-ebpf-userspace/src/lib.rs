@@ -21,6 +21,7 @@ pub struct EbpfBlocker {
     ebpf: Ebpf,
     pub pid_map: Arc<RwLock<HashMap<aya::maps::MapData, u32, u32>>>,
     pub forced_map: Arc<RwLock<HashMap<aya::maps::MapData, u32, u32>>>,
+    pushed_exp_inodes: Vec<InodeKey>,
 }
 
 #[repr(C)]
@@ -31,6 +32,41 @@ pub struct InodeState {
     pub _padding: [u8; 3], // 8-byte alignment
 }
 unsafe impl aya::Pod for InodeState {}
+
+/// Layout must stay identical to the eBPF side's InodeKey, the kernel hashes
+/// the raw key bytes so any drift turns every lookup into a silent miss
+#[repr(C, align(8))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InodeKey {
+    /// Entry name (dentry d_name / dirent d_name), zero-padded to 64 bytes
+    pub name: [u8; 64],
+    pub ino: u64,
+}
+unsafe impl aya::Pod for InodeKey {}
+
+impl InodeKey {
+    /// Build a key from an entry's name and inode number
+    ///
+    /// The name is truncated to 63 bytes: the eBPF side reads names through
+    /// bpf_probe_read_*_str, which reserves the last byte for a NUL
+    pub fn new(name: &str, ino: u64) -> Self {
+        let mut key = Self {
+            name: [0u8; 64],
+            ino,
+        };
+
+        let len = name.len().min(63);
+        key.name[..len].copy_from_slice(&name.as_bytes()[..len]);
+        if name.len() > 63 {
+            warn!(
+                "inode key name {} is longer than 63 bytes, truncating",
+                name
+            );
+        }
+
+        key
+    }
+}
 
 impl EbpfBlocker {
     pub fn new() -> CardwireEbpfResult<Self> {
@@ -98,10 +134,19 @@ impl EbpfBlocker {
             .map_err(CardwireEbpfError::aya)
         {
             Ok(_) => {
-                did_sys_exit_getdents64_success = true;
-                cardwire_sys_exit_getdents64
+                // The flag gates sys_enter_getdents64, which would otherwise
+                // fill CW_DIRENT with no exit hook to drain it: only raise it
+                // once the exit hook is actually attached
+                match cardwire_sys_exit_getdents64
                     .attach("syscalls", "sys_exit_getdents64")
-                    .map_err(CardwireEbpfError::aya)?;
+                    .map_err(CardwireEbpfError::aya)
+                {
+                    Ok(_) => did_sys_exit_getdents64_success = true,
+                    Err(err) => {
+                        warn!("Failed to attach sys_exit_getdents64: {}", err);
+                        warn!("falling back to a weakened cardwired...");
+                    }
+                }
             }
             Err(err) => {
                 // If we cannot load the program, it usually mean the kernel lockdown is enabled
@@ -129,9 +174,16 @@ impl EbpfBlocker {
                 .map_err(CardwireEbpfError::aya)
             {
                 Ok(_) => {
-                    cardwire_sys_enter_getdents64
+                    match cardwire_sys_enter_getdents64
                         .attach("syscalls", "sys_enter_getdents64")
-                        .map_err(CardwireEbpfError::aya)?;
+                        .map_err(CardwireEbpfError::aya)
+                    {
+                        Ok(_) => {}
+                        Err(err) => {
+                            warn!("Failed to attach sys_enter_getdents64: {}", err);
+                            warn!("falling back to a weakened cardwired...");
+                        }
+                    }
                 }
                 Err(err) => {
                     let lockdown = is_lockdown_enabled();
@@ -155,6 +207,7 @@ impl EbpfBlocker {
             ebpf,
             pid_map,
             forced_map,
+            pushed_exp_inodes: Vec::new(),
         })
     }
 
@@ -181,9 +234,9 @@ impl EbpfBlocker {
         }
     }
 
-    /// Block an inode, value is the associated GPU id
-    pub fn block_inode(&mut self, inode: u64, gpu_id: u32) -> CardwireEbpfResult<()> {
-        let mut inode_map: HashMap<_, u64, InodeState> = HashMap::try_from(
+    /// Block a file, value is the associated GPU id
+    pub fn block_inode(&mut self, key: InodeKey, gpu_id: u32) -> CardwireEbpfResult<()> {
+        let mut inode_map: HashMap<_, InodeKey, InodeState> = HashMap::try_from(
             self.ebpf
                 .map_mut("CW_BLOCKED_INO")
                 .ok_or_else(|| CardwireEbpfError::missing_map("CW_BLOCKED_INO"))?,
@@ -191,7 +244,7 @@ impl EbpfBlocker {
         .map_err(CardwireEbpfError::aya)?;
         inode_map
             .insert(
-                inode,
+                key,
                 InodeState {
                     gpu_id,
                     blocked: 1,
@@ -203,8 +256,8 @@ impl EbpfBlocker {
         Ok(())
     }
 
-    pub fn unblock_inode(&mut self, inode: u64, gpu_id: u32) -> CardwireEbpfResult<()> {
-        let mut inode_map: HashMap<_, u64, InodeState> = HashMap::try_from(
+    pub fn unblock_inode(&mut self, key: InodeKey, gpu_id: u32) -> CardwireEbpfResult<()> {
+        let mut inode_map: HashMap<_, InodeKey, InodeState> = HashMap::try_from(
             self.ebpf
                 .map_mut("CW_BLOCKED_INO")
                 .ok_or_else(|| CardwireEbpfError::missing_map("CW_BLOCKED_INO"))?,
@@ -213,7 +266,7 @@ impl EbpfBlocker {
         // Keep the inode in the map for tracking, but set blocked to 0
         inode_map
             .insert(
-                inode,
+                key,
                 InodeState {
                     gpu_id,
                     blocked: 0,
@@ -225,32 +278,96 @@ impl EbpfBlocker {
         Ok(())
     }
 
-    pub fn is_inode_blocked(&self, inode: u64, gpu_id: u32) -> CardwireEbpfResult<bool> {
-        let inode_map: HashMap<_, u64, InodeState> = HashMap::try_from(
+    /// Drop a file from the map entirely, a missing key is not an error
+    pub fn remove_inode(&mut self, key: InodeKey) -> CardwireEbpfResult<()> {
+        let mut inode_map: HashMap<_, InodeKey, InodeState> = HashMap::try_from(
+            self.ebpf
+                .map_mut("CW_BLOCKED_INO")
+                .ok_or_else(|| CardwireEbpfError::missing_map("CW_BLOCKED_INO"))?,
+        )
+        .map_err(CardwireEbpfError::aya)?;
+
+        match inode_map.remove(&key) {
+            Ok(()) | Err(MapError::KeyNotFound) => Ok(()),
+            Err(err) => Err(CardwireEbpfError::aya(err)),
+        }
+    }
+
+    pub fn is_inode_blocked(&self, key: InodeKey, gpu_id: u32) -> CardwireEbpfResult<bool> {
+        let inode_map: HashMap<_, InodeKey, InodeState> = HashMap::try_from(
             self.ebpf
                 .map("CW_BLOCKED_INO")
                 .ok_or_else(|| CardwireEbpfError::missing_map("CW_BLOCKED_INO"))?,
         )
         .map_err(CardwireEbpfError::aya)?;
 
-        match inode_map.get(&inode, 0) {
+        match inode_map.get(&key, 0) {
             Ok(state) => Ok(state.gpu_id == gpu_id && state.blocked == 1),
             Err(MapError::KeyNotFound) => Ok(false),
             Err(err) => Err(CardwireEbpfError::aya(err)),
         }
     }
 
-    pub fn block_exp_inode(&mut self, inode: u64, value: u32) -> CardwireEbpfResult<()> {
+    pub fn block_exp_inode(&mut self, key: InodeKey, value: u32) -> CardwireEbpfResult<()> {
         // Also insert hardcoded values for now
-        let mut inode_map: HashMap<_, u64, u32> = HashMap::try_from(
+        let mut inode_map: HashMap<_, InodeKey, u32> = HashMap::try_from(
             self.ebpf
                 .map_mut("CW_EXP_BLK_INO")
                 .ok_or_else(|| CardwireEbpfError::missing_map("CW_EXP_BLK_INO"))?,
         )
         .map_err(CardwireEbpfError::aya)?;
         inode_map
-            .insert(inode, value, 0)
+            .insert(key, value, 0)
             .map_err(CardwireEbpfError::aya)?;
+        Ok(())
+    }
+
+    pub fn remove_exp_inode(&mut self, key: InodeKey) -> CardwireEbpfResult<()> {
+        let mut inode_map: HashMap<_, InodeKey, u32> = HashMap::try_from(
+            self.ebpf
+                .map_mut("CW_EXP_BLK_INO")
+                .ok_or_else(|| CardwireEbpfError::missing_map("CW_EXP_BLK_INO"))?,
+        )
+        .map_err(CardwireEbpfError::aya)?;
+
+        match inode_map.remove(&key) {
+            Ok(()) | Err(MapError::KeyNotFound) => Ok(()),
+            Err(err) => Err(CardwireEbpfError::aya(err)),
+        }
+    }
+
+    /// `pushed_exp_inodes` mirrors what we put in `CW_EXP_BLK_INO`, so it is only
+    /// ever updated once the kernel agrees. Dropping a key from it before the
+    /// removal succeeds would leave an entry nothing can name afterwards, and it
+    /// would stay blocked until the daemon restarts
+    pub fn clear_exp_inodes(&mut self) -> CardwireEbpfResult<()> {
+        while let Some(key) = self.pushed_exp_inodes.last().copied() {
+            self.remove_exp_inode(key)?;
+            self.pushed_exp_inodes.pop();
+        }
+        Ok(())
+    }
+
+    pub fn sync_exp_inodes(&mut self, keys: Vec<InodeKey>, gpu_id: u32) -> CardwireEbpfResult<()> {
+        let stale: Vec<InodeKey> = self
+            .pushed_exp_inodes
+            .iter()
+            .copied()
+            .filter(|key| !keys.contains(key))
+            .collect();
+
+        for key in stale {
+            self.remove_exp_inode(key)?;
+            self.pushed_exp_inodes.retain(|tracked| *tracked != key);
+        }
+
+        for key in keys {
+            self.block_exp_inode(key, gpu_id)?;
+            if !self.pushed_exp_inodes.contains(&key) {
+                self.pushed_exp_inodes.push(key);
+            }
+        }
+
         Ok(())
     }
 
@@ -462,5 +579,32 @@ mod tests {
         let key = EbpfBlocker::comm_to_key(name);
         assert_eq!(&key[..15], b"123456789012345");
         assert_eq!(key[15], 0);
+    }
+
+    #[test]
+    fn same_inode_with_different_names_is_not_the_same_key() {
+        let card = InodeKey::new("card1", 259);
+        let render = InodeKey::new("renderD129", 259);
+
+        assert_ne!(card, render);
+        assert_eq!(card.ino, render.ino);
+    }
+
+    #[test]
+    fn short_names_are_zero_padded() {
+        let key = InodeKey::new("sys", 13670);
+
+        assert_eq!(&key.name[..3], b"sys");
+        assert_eq!(&key.name[3..], &[0u8; 61]);
+        assert_eq!(key.ino, 13670);
+    }
+
+    #[test]
+    fn names_longer_than_63_bytes_are_truncated() {
+        let long = "x".repeat(100);
+        let key = InodeKey::new(&long, 1);
+
+        assert_eq!(&key.name[..63], &long.as_bytes()[..63]);
+        assert_eq!(&key.name[63..], &[0u8; 1]);
     }
 }

@@ -2,14 +2,14 @@
 #![no_main]
 
 use aya_ebpf::{
-    helpers::{bpf_get_current_pid_tgid, bpf_probe_read_user, bpf_probe_write_user}, macros::{lsm, tracepoint}, programs::{LsmContext, TracePointContext}
+    helpers::{bpf_get_current_pid_tgid, bpf_loop}, macros::{lsm, tracepoint}, programs::{LsmContext, TracePointContext}
 };
-use aya_log_ebpf::{error, warn};
+use aya_log_ebpf::{debug, error, warn};
 
 use crate::{
     helpers::{
-        is_cardwired, is_comm_whitelisted, is_hybrid, is_inode_blocked, is_manual, is_smart
-    }, maps::{CW_ALLOWED_PID, CW_DIRENT, CW_EXEC_EVENTS, CW_FORCED_PID, ExecEvent}, vmlinux::{dentry, file, inode, linux_dirent64, path}
+        KeyBuild, MAX_DIRENTS, SCAN_OK, SCAN_READ_FAILED, SCAN_WRITE_FAILED, ScanCtx, dentry_key, inode_key, is_cardwired, is_comm_whitelisted, is_hybrid, is_inode_blocked, is_manual, is_smart, scan_dirent
+    }, maps::{CW_ALLOWED_PID, CW_DIRENT, CW_EXEC_EVENTS, CW_FORCED_PID, ExecEvent}, vmlinux::{dentry, file, inode, path}
 };
 
 #[allow(
@@ -127,15 +127,25 @@ unsafe fn try_file_open(ctx: LsmContext) -> Result<i32, i32> {
         return ReturnCode::SUCCESS;
     }
 
-    // Get a mutable ptr to the inode
-    let inode_ptr: *mut inode = unsafe { (*d).d_inode };
+    let key = match unsafe { dentry_key(d) } {
+        KeyBuild::Key(key) => key,
+        KeyBuild::Unnamed => {
+            debug!(
+                &ctx,
+                "EBPF dentry_key() found no name in file_open, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+        KeyBuild::ProbeFailed => {
+            error!(
+                &ctx,
+                "EBPF dentry_key() could not read the dentry in file_open, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+    };
 
-    if inode_ptr.is_null() {
-        return ReturnCode::SUCCESS;
-    }
-    let inode: u64 = unsafe { (*inode_ptr).i_ino };
-
-    match unsafe { is_inode_blocked(inode) } {
+    match unsafe { is_inode_blocked(key) } {
         true => ReturnCode::ENOENT,
         false => ReturnCode::SUCCESS,
     }
@@ -196,9 +206,26 @@ unsafe fn try_inode_permission(ctx: LsmContext) -> Result<i32, i32> {
     if inode_ptr.is_null() {
         return ReturnCode::SUCCESS;
     }
-    let inode: u64 = unsafe { (*inode_ptr).i_ino };
 
-    match unsafe { is_inode_blocked(inode) } {
+    let key = match unsafe { inode_key(inode_ptr) } {
+        KeyBuild::Key(key) => key,
+        KeyBuild::Unnamed => {
+            debug!(
+                &ctx,
+                "EBPF inode_key() found an unnamed inode in inode_permission, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+        KeyBuild::ProbeFailed => {
+            error!(
+                &ctx,
+                "EBPF inode_key() could not read the inode in inode_permission, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+    };
+
+    match unsafe { is_inode_blocked(key) } {
         true => ReturnCode::ENOENT,
         false => ReturnCode::SUCCESS,
     }
@@ -264,15 +291,25 @@ unsafe fn try_inode_getattr(ctx: LsmContext) -> Result<i32, i32> {
         return ReturnCode::SUCCESS;
     }
 
-    // Get a mutable ptr to the inode, in inode_permission it's the first argument
-    let inode_ptr: *mut inode = unsafe { (*dentry_ptr).d_inode };
+    let key = match unsafe { dentry_key(dentry_ptr) } {
+        KeyBuild::Key(key) => key,
+        KeyBuild::Unnamed => {
+            debug!(
+                &ctx,
+                "EBPF dentry_key() found no name in inode_getattr, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+        KeyBuild::ProbeFailed => {
+            error!(
+                &ctx,
+                "EBPF dentry_key() could not read the dentry in inode_getattr, skipping"
+            );
+            return ReturnCode::SUCCESS;
+        }
+    };
 
-    if inode_ptr.is_null() {
-        return ReturnCode::SUCCESS;
-    }
-    let inode: u64 = unsafe { (*inode_ptr).i_ino };
-
-    match unsafe { is_inode_blocked(inode) } {
+    match unsafe { is_inode_blocked(key) } {
         true => ReturnCode::ENOENT,
         false => ReturnCode::SUCCESS,
     }
@@ -347,13 +384,14 @@ pub fn tracepoint_exit_getdents64(ctx: TracePointContext) -> u32 {
 
 unsafe fn try_tracepoint_exit_getdents64(ctx: TracePointContext) -> Result<i32, i32> {
     let tid = bpf_get_current_pid_tgid() as u32;
-    let dirent_ptr = match unsafe { CW_DIRENT.get(tid) } {
-        Some(ptr) => *ptr as *const linux_dirent64,
-        None => return ReturnCode::SUCCESS,
-    };
 
-    // Remove entry immediately to avoid map leak
+    // Drain the map up front to avoid a map leak on an early return
+    let dirp = unsafe { CW_DIRENT.get(tid) }.copied();
     let _ = CW_DIRENT.remove(tid);
+
+    let Some(dirp) = dirp else {
+        return ReturnCode::SUCCESS;
+    };
 
     let retval = match unsafe { ctx.read_at::<i64>(16) } {
         Ok(ret) => ret as u64,
@@ -364,57 +402,40 @@ unsafe fn try_tracepoint_exit_getdents64(ctx: TracePointContext) -> Result<i32, 
         return ReturnCode::SUCCESS;
     }
 
-    // Buffer end = base + bytes written
-    let base = dirent_ptr as u64;
-    let end = base.wrapping_add(retval);
+    let mut scan = ScanCtx {
+        dirent_ptr: dirp,
+        end: dirp.wrapping_add(retval),
+        prev_ptr: 0,
+        prev_reclen: 0,
+        status: SCAN_OK,
+        errno: 0,
+    };
 
-    let mut dirent_ptr = dirent_ptr;
-    let mut prev_ptr: u64 = 0;
-    let mut prev_reclen: u16 = 0;
-    for _ in 0..512 {
-        // Check before reading
-        if (dirent_ptr as u64).wrapping_add(core::mem::size_of::<linux_dirent64>() as u64) > end {
-            break;
-        }
-
-        let dirent = match unsafe { bpf_probe_read_user(dirent_ptr) } {
-            Ok(dirent) => dirent,
-            Err(_) => break,
-        };
-
-        let reclen = dirent.d_reclen;
-
-        // Malformed
-        if reclen == 0 || reclen > 512 {
-            break;
-        }
-
-        let blocked = unsafe { is_inode_blocked(dirent.d_ino) };
-        if blocked {
-            // We can't hide the first entry
-            if prev_ptr != 0 {
-                let new_reclen = prev_reclen.wrapping_add(reclen);
-
-                let reclen_ptr = (prev_ptr.wrapping_add(16)) as *mut u16;
-                match unsafe { bpf_probe_write_user(reclen_ptr, &new_reclen) } {
-                    Ok(_) => {}
-                    Err(err) => {
-                        error!(&ctx, "failed to write new reclen {}", err);
-                        break;
-                    }
-                };
-
-                prev_reclen = new_reclen;
-            }
-        } else {
-            prev_ptr = dirent_ptr as u64;
-            prev_reclen = reclen;
-        }
-
-        dirent_ptr = (dirent_ptr as u64).wrapping_add(reclen as u64) as *const linux_dirent64;
+    // The callback reference must be transmuted from the fn pointer, never
+    // routed through an integer: the relocation that tags it as
+    // BPF_PSEUDO_FUNC only survives if the function symbol reaches ld_imm64
+    // untouched
+    let callback = unsafe {
+        core::mem::transmute::<unsafe extern "C" fn(u32, *mut ScanCtx) -> u64, *mut core::ffi::c_void>(
+            scan_dirent,
+        )
+    };
+    let scan_ptr: *mut core::ffi::c_void = core::ptr::addr_of_mut!(scan).cast();
+    // MAX_DIRENTS covers any buffer the retval guard lets through, a negative
+    // return would mean the helper itself rejected the call (EINVAL/E2BIG)
+    let loop_ret = unsafe { bpf_loop(MAX_DIRENTS, callback, scan_ptr, 0) };
+    if loop_ret < 0 {
+        warn!(&ctx, "bpf_loop failed with {}", loop_ret);
     }
 
-    ReturnCode::SUCCESS
+    match scan.status {
+        SCAN_WRITE_FAILED => {
+            error!(&ctx, "failed to write new reclen {}", scan.errno);
+            ReturnCode::SUCCESS
+        }
+        SCAN_READ_FAILED => Err(-1),
+        _ => ReturnCode::SUCCESS,
+    }
 }
 
 #[tracepoint]
